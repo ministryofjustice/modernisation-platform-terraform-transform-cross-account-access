@@ -1,5 +1,31 @@
 data "aws_caller_identity" "spoke" {}
 
+locals {
+  external_id_secret_name = coalesce(var.external_id_secret_name, "transform/${var.workspace_name}/external-id")
+}
+
+resource "random_string" "external_id" {
+  length  = var.external_id_length
+  upper   = true
+  lower   = true
+  numeric = true
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "transform_external_id" {
+  name        = local.external_id_secret_name
+  description = "External ID for AWS Transform workspace ${var.workspace_name}"
+  tags = merge(var.tags, {
+    TransformRole = "spoke-migration"
+    Workspace     = var.workspace_name
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "transform_external_id" {
+  secret_id     = aws_secretsmanager_secret.transform_external_id.id
+  secret_string = random_string.external_id.result
+}
+
 # ---------------------------------------------------------------------------
 # 1) Execution role — what the AWS Transform workspace's target account
 #    connection assumes to act in this account. Trust is scoped to the hub
@@ -26,7 +52,7 @@ resource "aws_iam_role" "transform_exec" {
       Action    = ["sts:AssumeRole", "sts:TagSession"]
       Condition = {
         StringEquals = {
-          "sts:ExternalId"           = var.external_id
+          "sts:ExternalId"           = random_string.external_id.result
           "aws:RequestTag/Workspace" = var.workspace_name
         }
       }

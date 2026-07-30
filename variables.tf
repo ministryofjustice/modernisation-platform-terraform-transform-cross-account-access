@@ -8,9 +8,21 @@ variable "hub_account_id" {
   type        = string
 }
 
-variable "external_id" {
-  description = "Unique external ID used in the cross-account trust condition. Generate and store this via Secrets Manager / your secrets pipeline — do not hardcode a guessable value in real use."
+variable "external_id_secret_name" {
+  description = "Secrets Manager secret name for the generated AWS Transform external ID. If null, defaults to transform/<workspace_name>/external-id."
   type        = string
+  default     = null
+}
+
+variable "external_id_length" {
+  description = "Length of the generated alphanumeric AWS Transform external ID."
+  type        = number
+  default     = 32
+
+  validation {
+    condition     = var.external_id_length >= 8 && var.external_id_length <= 1224
+    error_message = "external_id_length must be between 8 and 1224 characters."
+  }
 }
 
 variable "registry_table_name" {
