@@ -52,7 +52,7 @@ resource "aws_iam_role" "transform_exec" {
       Action    = ["sts:AssumeRole", "sts:TagSession"]
       Condition = {
         StringEquals = {
-          "sts:ExternalId"           = random_string.external_id.result
+          "sts:ExternalId"           = aws_secretsmanager_secret_version.transform_external_id.secret_string
           "aws:RequestTag/Workspace" = var.workspace_name
         }
       }

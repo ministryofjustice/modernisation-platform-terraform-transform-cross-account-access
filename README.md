@@ -134,7 +134,6 @@ No modules.
 
 | Name | Description |
 |------|-------------|
-| <a name="output_external_id"></a> [external\_id](#output\_external\_id) | Generated AWS Transform external ID used in the role trust policy |
 | <a name="output_external_id_secret_arn"></a> [external\_id\_secret\_arn](#output\_external\_id\_secret\_arn) | Secrets Manager secret ARN containing the generated AWS Transform external ID |
 | <a name="output_external_id_secret_name"></a> [external\_id\_secret\_name](#output\_external\_id\_secret\_name) | Secrets Manager secret name containing the generated AWS Transform external ID |
 | <a name="output_execution_role_arn"></a> [execution\_role\_arn](#output\_execution\_role\_arn) | Paste into the AWS Transform console when configuring this workspace's target account connection |
