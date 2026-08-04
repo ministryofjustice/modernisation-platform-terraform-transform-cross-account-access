@@ -25,6 +25,24 @@ variable "external_id_length" {
   }
 }
 
+variable "transform_bucket_prefix" {
+  description = "S3 bucket prefix for the AWS Transform bucket created in the target account. If null, defaults to aws-transform-<workspace_name>."
+  type        = string
+  default     = null
+}
+
+variable "transform_bucket_kms_alias" {
+  description = "KMS alias for the AWS Transform bucket encryption key. If null, defaults to alias/aws-transform-bucket-<workspace_name>."
+  type        = string
+  default     = null
+}
+
+variable "transform_workspace_url" {
+  description = "AWS Transform workspace URL used for S3 CORS configuration. If null, the CORS configuration is not created."
+  type        = string
+  default     = null
+}
+
 variable "registry_table_name" {
   description = "Name of the hub's transform-migration-registry DynamoDB table, so this workspace can self-register"
   type        = string

@@ -1,7 +1,14 @@
 data "aws_caller_identity" "spoke" {}
 
+data "aws_region" "current" {}
+
 locals {
   external_id_secret_name = coalesce(var.external_id_secret_name, "transform/${var.workspace_name}/external-id")
+  transform_bucket_prefix = coalesce(var.transform_bucket_prefix, "aws-transform-${lower(var.workspace_name)}")
+  transform_bucket_kms_alias = coalesce(
+    var.transform_bucket_kms_alias,
+    "alias/aws-transform-bucket-${lower(var.workspace_name)}"
+  )
 }
 
 resource "random_string" "external_id" {
@@ -24,6 +31,214 @@ resource "aws_secretsmanager_secret" "transform_external_id" {
 resource "aws_secretsmanager_secret_version" "transform_external_id" {
   secret_id     = aws_secretsmanager_secret.transform_external_id.id
   secret_string = random_string.external_id.result
+}
+
+module "transform_s3_bucket" {
+  source = "github.com/ministryofjustice/modernisation-platform-terraform-s3-bucket?ref=c8889e65f4d8a3d53d2cbd93b7be714e990020b7"
+
+  providers = {
+    aws                    = aws
+    aws.bucket-replication = aws
+  }
+
+  bucket_prefix               = local.transform_bucket_prefix
+  bucket_policy               = [data.aws_iam_policy_document.transform_s3_bucket_policy.json]
+  sse_algorithm               = "aws:kms"
+  custom_kms_key              = aws_kms_key.transform_bucket.arn
+  enforce_kms_request_headers = true
+  replication_enabled         = false
+  versioning_enabled          = true
+  force_destroy               = false
+  ownership_controls          = "BucketOwnerEnforced"
+
+  lifecycle_rule = [
+    {
+      id      = "main"
+      enabled = "Enabled"
+      prefix  = ""
+
+      tags = {
+        rule      = "log"
+        autoclean = "true"
+      }
+
+      transition = [
+        {
+          days          = 90
+          storage_class = "STANDARD_IA"
+          }, {
+          days          = 365
+          storage_class = "GLACIER"
+        }
+      ]
+
+      noncurrent_version_transition = [
+        {
+          days          = 90
+          storage_class = "STANDARD_IA"
+          }, {
+          days          = 365
+          storage_class = "GLACIER"
+        }
+      ]
+
+      noncurrent_version_expiration = {
+        days = 730
+      }
+    }
+  ]
+
+  tags = merge(var.tags, {
+    TransformRole = "spoke-migration"
+    Workspace     = var.workspace_name
+  })
+}
+
+data "aws_iam_policy_document" "transform_s3_bucket_policy" {
+  statement {
+    sid    = "AllowTransformAccessToBucket"
+    effect = "Allow"
+    actions = [
+      "s3:GetBucketLocation",
+      "s3:GetObject",
+      "s3:ListBucket",
+      "s3:PutObject",
+      "s3:AbortMultipartUpload"
+    ]
+
+    resources = [
+      module.transform_s3_bucket.bucket.arn,
+      "${module.transform_s3_bucket.bucket.arn}/*"
+    ]
+
+    principals {
+      type        = "Service"
+      identifiers = ["transform.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [var.hub_account_id]
+    }
+  }
+}
+
+resource "aws_kms_key" "transform_bucket" {
+  description             = "KMS key for AWS Transform S3 bucket ${var.workspace_name}"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+  policy                  = data.aws_iam_policy_document.transform_kms_key_policy.json
+
+  tags = merge(var.tags, {
+    TransformRole = "spoke-migration"
+    Workspace     = var.workspace_name
+  })
+}
+
+resource "aws_kms_alias" "transform_bucket" {
+  name          = local.transform_bucket_kms_alias
+  target_key_id = aws_kms_key.transform_bucket.key_id
+}
+
+resource "aws_s3_bucket_cors_configuration" "transform_s3_bucket" {
+  count  = var.transform_workspace_url == null ? 0 : 1
+  bucket = module.transform_s3_bucket.bucket.id
+
+  cors_rule {
+    allowed_headers = [
+      "host",
+      "content-type",
+      "if-none-match",
+      "x-amz-checksum-sha256",
+      "x-amz-expected-bucket-owner",
+      "x-amz-server-side-encryption",
+      "x-amz-server-side-encryption-aws-kms-key-id",
+      "x-amz-server-side-encryption-context",
+      "x-amz-source-account",
+      "x-amz-source-arn"
+    ]
+    allowed_methods = ["GET", "PUT", "HEAD"]
+    allowed_origins = [var.transform_workspace_url]
+    expose_headers = [
+      "ETag",
+      "x-amz-checksum-sha256",
+      "x-amz-request-id",
+      "x-amz-id-2"
+    ]
+    max_age_seconds = 3600
+  }
+}
+
+data "aws_iam_policy_document" "transform_kms_key_policy" {
+  statement {
+    sid    = "EnableRootPermissions"
+    effect = "Allow"
+    actions = [
+      "kms:*"
+    ]
+
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.spoke.account_id}:root"]
+    }
+  }
+
+  statement {
+    sid    = "AllowTransformToUseKey"
+    effect = "Allow"
+    actions = [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncrypt*"
+    ]
+
+    resources = ["*"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["transform.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [var.hub_account_id]
+    }
+  }
+
+  statement {
+    sid    = "AllowAWSTransformServiceAccess"
+    effect = "Allow"
+    actions = [
+      "kms:CreateGrant",
+      "kms:DescribeKey"
+    ]
+
+    resources = ["*"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["transform.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["transform.${data.aws_region.current.name}.amazonaws.com"]
+    }
+
+    condition {
+      test     = "Bool"
+      variable = "kms:GrantIsForAWSResource"
+      values   = ["true"]
+    }
+  }
 }
 
 # ---------------------------------------------------------------------------
